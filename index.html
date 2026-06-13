@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Simple WebRTC Test</title>
+</head>
+<body>
+  <h2>WebRTC P2P Test</h2>
+
+  <button onclick="start()">Start</button>
+  <button onclick="createOffer()">Create Offer</button>
+  <button onclick="createAnswer()">Create Answer</button>
+
+  <br><br>
+
+  <textarea id="local" rows="10" cols="60" placeholder="Local SDP"></textarea>
+  <br>
+  <textarea id="remote" rows="10" cols="60" placeholder="Paste Remote SDP here"></textarea>
+  <br>
+
+  <button onclick="setRemote()">Set Remote SDP</button>
+
+  <script>
+    let pc;
+
+    const config = {
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" }
+      ]
+    };
+
+    function start() {
+      pc = new RTCPeerConnection(config);
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate === null) {
+          document.getElementById("local").value =
+            JSON.stringify(pc.localDescription);
+        }
+      };
+
+      pc.onconnectionstatechange = () => {
+        console.log("State:", pc.connectionState);
+      };
+
+      console.log("PeerConnection created");
+    }
+
+    async function createOffer() {
+      const dc = pc.createDataChannel("chat");
+
+      dc.onopen = () => console.log("DataChannel open");
+      dc.onmessage = (e) => console.log("Message:", e.data);
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+    }
+
+    async function createAnswer() {
+      pc.ondatachannel = (event) => {
+        const dc = event.channel;
+        dc.onmessage = (e) => console.log("Message:", e.data);
+
+        dc.onopen = () => {
+          dc.send("Hello from Answer side!");
+        };
+      };
+
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+    }
+
+    async function setRemote() {
+      const remote = JSON.parse(document.getElementById("remote").value);
+      await pc.setRemoteDescription(remote);
+      console.log("Remote set");
+    }
+  </script>
+</body>
+</html>
