@@ -1,80 +1,255 @@
 <!DOCTYPE html>
-<html>
+<html lang="fa" dir="rtl">
 <head>
-  <meta charset="UTF-8">
-  <title>Simple WebRTC Test</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>چت WebRTC بدون سرور (P2P)</title>
+    <style>
+        body { font-family: Tahoma, Arial, sans-serif; background: #f4f4f9; margin: 0; padding: 20px; color: #333; }
+        .container { max-width: 900px; margin: auto; display: flex; flex-wrap: wrap; gap: 20px; }
+        .panel { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); flex: 1; min-width: 300px; }
+        h2, h3 { margin-top: 0; color: #2c3e50; }
+        textarea { width: 100%; height: 80px; margin-bottom: 10px; font-family: monospace; direction: ltr; padding: 8px; box-sizing: border-box; resize: vertical; }
+        button { background: #3498db; color: white; border: none; padding: 10px 15px; cursor: pointer; border-radius: 4px; font-weight: bold; margin-bottom: 5px; }
+        button:hover { background: #2980b9; }
+        button:disabled { background: #bdc3c7; cursor: not-allowed; }
+        .log-box { background: #222; color: #0f0; padding: 10px; height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px; direction: ltr; text-align: left; border-radius: 4px; }
+        .chat-box { border: 1px solid #ccc; height: 250px; overflow-y: auto; margin-bottom: 10px; padding: 10px; background: #fafafa; display: flex; flex-direction: column; gap: 8px; }
+        .msg { padding: 8px; border-radius: 5px; max-width: 80%; word-wrap: break-word; }
+        .msg.me { background: #d1ecf1; align-self: flex-start; border-right: 4px solid #17a2b8; }
+        .msg.other { background: #e2e3e5; align-self: flex-end; border-left: 4px solid #6c757d; }
+        .chat-input { display: flex; gap: 10px; }
+        .chat-input input { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 4px; }
+        .status-badge { display: inline-block; padding: 5px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; background: #e74c3c; color: white; margin-bottom: 15px; }
+        .status-badge.connected { background: #2ecc71; }
+    </style>
 </head>
 <body>
-  <h2>WebRTC P2P Test</h2>
 
-  <button onclick="start()">Start</button>
-  <button onclick="createOffer()">Create Offer</button>
-  <button onclick="createAnswer()">Create Answer</button>
+<div class="container">
+    <div class="panel">
+        <h2>۱. تنظیمات اتصال</h2>
+        <p style="font-size: 13px; color: #666;">برای اتصال، کاربر اول باید پیشنهاد (Offer) بسازد و کد را به کاربر دوم بدهد. کاربر دوم کد را وارد کرده و پاسخ (Answer) می‌سازد و به کاربر اول برمی‌گرداند.</p>
+        
+        <div>
+            <h3>کد شما (برای ارسال به طرف مقابل)</h3>
+            <textarea id="localCode" readonly placeholder="کد شما پس از تولید در اینجا نمایش داده می‌شود..."></textarea>
+            <button id="btnCreateOffer">ساخت پیشنهاد (کاربر ۱)</button>
+            <button id="btnCopy" onclick="copyLocalCode()">کپی کد</button>
+        </div>
 
-  <br><br>
+        <hr style="border:0; border-top:1px solid #eee; margin: 20px 0;">
 
-  <textarea id="local" rows="10" cols="60" placeholder="Local SDP"></textarea>
-  <br>
-  <textarea id="remote" rows="10" cols="60" placeholder="Paste Remote SDP here"></textarea>
-  <br>
+        <div>
+            <h3>کد طرف مقابل (دریافتی از دوستتان)</h3>
+            <textarea id="remoteCode" placeholder="کد Base64 دریافتی را اینجا پیست کنید..."></textarea>
+            <button id="btnProcessCode">پردازش کد دریافتی</button>
+        </div>
+    </div>
 
-  <button onclick="setRemote()">Set Remote SDP</button>
+    <div class="panel">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h2>۲. پیام‌رسان P2P</h2>
+            <div id="connectionStatus" class="status-badge">قطع است</div>
+        </div>
 
-  <script>
-    let pc;
+        <div class="chat-box" id="chatBox"></div>
+        
+        <div class="chat-input">
+            <input type="text" id="txtMessage" placeholder="پیام خود را بنویسید..." disabled onkeypress="handleEnter(event)">
+            <button id="btnSend" disabled>ارسال</button>
+        </div>
 
-    const config = {
-      iceServers: [
-        { urls: "stun:stun.l.google.com:19302" }
-      ]
+        <h3 style="margin-top: 20px;">گزارش لحظه‌ای (Logs)</h3>
+        <div class="log-box" id="logBox"></div>
+    </div>
+</div>
+
+<script>
+    // تنظیمات STUN سرورها برای عبور از NAT (تایین مسیر بین دو مودم مختلف)
+    const configuration = {
+        'iceServers': [
+            {'urls': 'stun:stun.l.google.com:19302'},
+            {'urls': 'stun:stun1.l.google.com:19302'},
+            {'urls': 'stun:stun.services.mozilla.com'}
+        ]
     };
 
-    function start() {
-      pc = new RTCPeerConnection(config);
+    let peerConnection;
+    let dataChannel;
 
-      pc.onicecandidate = (e) => {
-        if (e.candidate === null) {
-          document.getElementById("local").value =
-            JSON.stringify(pc.localDescription);
-        }
-      };
+    // عناصر HTML
+    const logBox = document.getElementById('logBox');
+    const localCodeBox = document.getElementById('localCode');
+    const remoteCodeBox = document.getElementById('remoteCode');
+    const btnCreateOffer = document.getElementById('btnCreateOffer');
+    const btnProcessCode = document.getElementById('btnProcessCode');
+    const chatBox = document.getElementById('chatBox');
+    const txtMessage = document.getElementById('txtMessage');
+    const btnSend = document.getElementById('btnSend');
+    const connectionStatus = document.getElementById('connectionStatus');
 
-      pc.onconnectionstatechange = () => {
-        console.log("State:", pc.connectionState);
-      };
-
-      console.log("PeerConnection created");
+    function log(message) {
+        const time = new Date().toLocaleTimeString();
+        logBox.innerHTML += `[${time}] ${message}<br>`;
+        logBox.scrollTop = logBox.scrollHeight;
+        console.log(`[${time}] ${message}`);
     }
 
-    async function createOffer() {
-      const dc = pc.createDataChannel("chat");
+    function initPeerConnection() {
+        if (peerConnection) return;
+        
+        log("در حال ساخت RTCPeerConnection با سرورهای STUN گوگل...");
+        peerConnection = new RTCPeerConnection(configuration);
 
-      dc.onopen = () => console.log("DataChannel open");
-      dc.onmessage = (e) => console.log("Message:", e.data);
-
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-    }
-
-    async function createAnswer() {
-      pc.ondatachannel = (event) => {
-        const dc = event.channel;
-        dc.onmessage = (e) => console.log("Message:", e.data);
-
-        dc.onopen = () => {
-          dc.send("Hello from Answer side!");
+        // وقتی مرورگر کاندیداهای ICE (مسیرهای شبکه) را پیدا می‌کند
+        peerConnection.onicecandidate = event => {
+            if (event.candidate) {
+                log("پیدا کردن مسیر شبکه (ICE Candidate)...");
+            } else {
+                // وقتی تمام مسیرها پیدا شد (Trickle ICE کامل شد)
+                log("جمع‌آوری کاندیداهای ICE کامل شد.");
+                const sdpData = JSON.stringify(peerConnection.localDescription);
+                const base64Data = btoa(sdpData);
+                localCodeBox.value = base64Data;
+                log("کد Base64 نهایی برای ارسال آماده است.");
+            }
         };
-      };
 
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
+        // تغییرات وضعیت اتصال
+        peerConnection.onconnectionstatechange = () => {
+            log(`وضعیت اتصال تغییر کرد به: ${peerConnection.connectionState}`);
+            if (peerConnection.connectionState === 'connected') {
+                updateStatus(true);
+            } else if (peerConnection.connectionState === 'disconnected' || peerConnection.connectionState === 'failed') {
+                updateStatus(false);
+            }
+        };
+
+        // دریافت دیتای چنل از طرف مقابل (مخصوص کاربر ۲)
+        peerConnection.ondatachannel = event => {
+            log("کانال داده از طرف مقابل دریافت شد.");
+            dataChannel = event.channel;
+            setupDataChannel();
+        };
     }
 
-    async function setRemote() {
-      const remote = JSON.parse(document.getElementById("remote").value);
-      await pc.setRemoteDescription(remote);
-      console.log("Remote set");
+    function setupDataChannel() {
+        dataChannel.onopen = () => {
+            log("کانال داده باز شد! اکنون می‌توانید چت کنید.");
+            updateStatus(true);
+        };
+        dataChannel.onclose = () => {
+            log("کانال داده بسته شد.");
+            updateStatus(false);
+        };
+        dataChannel.onmessage = event => {
+            log("پیام جدید دریافت شد.");
+            appendMessage(event.data, 'other');
+        };
     }
-  </script>
+
+    // کاربر ۱: ساخت پیشنهاد
+    btnCreateOffer.onclick = async () => {
+        btnCreateOffer.disabled = true;
+        initPeerConnection();
+        
+        log("در حال ایجاد کانال داده (Data Channel)...");
+        dataChannel = peerConnection.createDataChannel('chat');
+        setupDataChannel();
+
+        log("در حال ساخت Offer...");
+        try {
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            log("Offer تنظیم شد. در حال جمع‌آوری اطلاعات شبکه (منتظر بمانید)...");
+            // کد نهایی در onicecandidate تولید می‌شود
+        } catch (e) {
+            log(`خطا در ساخت Offer: ${e}`);
+        }
+    };
+
+    // پردازش کدی که کاربر پیست می‌کند (چه Offer چه Answer)
+    btnProcessCode.onclick = async () => {
+        const remoteBase64 = remoteCodeBox.value.trim();
+        if (!remoteBase64) {
+            alert("لطفاً کد طرف مقابل را وارد کنید!");
+            return;
+        }
+
+        try {
+            const remoteJson = atob(remoteBase64);
+            const remoteDesc = JSON.parse(remoteJson);
+            
+            initPeerConnection();
+
+            log(`در حال تنظیم مشخصات راه دور از نوع: ${remoteDesc.type}`);
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(remoteDesc));
+
+            if (remoteDesc.type === 'offer') {
+                // کاربر ۲ هستیم: Offer گرفتیم، باید Answer بسازیم
+                log("Offer دریافت شد. در حال ساخت Answer...");
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                log("Answer تنظیم شد. در حال جمع‌آوری اطلاعات شبکه (منتظر بمانید)...");
+                // کد نهایی در onicecandidate تولید می‌شود
+            } else if (remoteDesc.type === 'answer') {
+                // کاربر ۱ هستیم: Answer گرفتیم، ارتباط باید وصل شود
+                log("Answer با موفقیت دریافت و تنظیم شد. منتظر برقراری اتصال P2P...");
+            }
+        } catch (e) {
+            log(`خطا در پردازش کد: ${e}`);
+            alert("کد نامعتبر است. لطفاً مطمئن شوید کد کامل کپی شده است.");
+        }
+    };
+
+    // توابع مربوط به چت و UI
+    function updateStatus(isConnected) {
+        if (isConnected) {
+            connectionStatus.textContent = "متصل";
+            connectionStatus.className = "status-badge connected";
+            txtMessage.disabled = false;
+            btnSend.disabled = false;
+        } else {
+            connectionStatus.textContent = "قطع است";
+            connectionStatus.className = "status-badge";
+            txtMessage.disabled = true;
+            btnSend.disabled = true;
+        }
+    }
+
+    function appendMessage(text, sender) {
+        const div = document.createElement('div');
+        div.className = `msg ${sender}`;
+        div.textContent = text;
+        chatBox.appendChild(div);
+        chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    function sendMessage() {
+        const text = txtMessage.value.trim();
+        if (text && dataChannel && dataChannel.readyState === 'open') {
+            dataChannel.send(text);
+            appendMessage(text, 'me');
+            txtMessage.value = '';
+            log("پیام ارسال شد.");
+        }
+    }
+
+    btnSend.onclick = sendMessage;
+
+    function handleEnter(e) {
+        if (e.key === 'Enter') {
+            sendMessage();
+        }
+    }
+
+    function copyLocalCode() {
+        localCodeBox.select();
+        document.execCommand('copy');
+        log("کد در کلیپ‌بورد کپی شد.");
+    }
+</script>
+
 </body>
 </html>
